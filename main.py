@@ -227,14 +227,14 @@ def show_confession_hub(chat_id, c_num):
         f"📖 <b>Confession #{c_num}</b>\n\n"
         f"💬 <i>Join the anonymous discussion! You can read what others said or share your own thoughts anonymously.</i>"
     )
-    bot.send_message(chat_id, hub_text, reply_markup=confession_hub_markup(c_num, count))
+    bot.send_message(chat_id, hub_text, reply_markup=confession_hub_markup(c_num, count), parse_mode="HTML")
 
 def display_browse_comments(chat_id, c_num):
     c_key = str(c_num)
     comments_store = load_comments_store()
     raw_entry = comments_store.get(c_key, [])
     
-    # Normalize list vs dictionary structures
+    # Normalize list vs dictionary
     if isinstance(raw_entry, dict):
         comments_list = raw_entry.get("comments", [])
     elif isinstance(raw_entry, list):
@@ -250,14 +250,13 @@ def display_browse_comments(chat_id, c_num):
         bot.send_message(
             chat_id,
             f"💬 <b>Comments for Confession #{c_num}</b>\n\nNo comments yet! Be the first to share your thoughts anonymously.",
-            reply_markup=markup
+            reply_markup=markup,
+            parse_mode="HTML"
         )
         return
 
-    bot.send_message(chat_id, f"💬 <b>Discussion for Confession #{c_num} ({total} comments):</b>")
-
+    # Render each comment with error isolation and fallback
     for idx, c in enumerate(comments_list):
-        # 1. Normalize individual comment formats (handles string, old dict, new dict)
         if isinstance(c, str):
             c_text = c
             c_type = "text"
@@ -279,7 +278,6 @@ def display_browse_comments(chat_id, c_num):
         else:
             continue
 
-        # 2. Threaded reply header
         reply_header = ""
         if c_reply_to is not None and isinstance(c_reply_to, int) and c_reply_to < len(comments_list):
             ref_c = comments_list[c_reply_to]
@@ -291,15 +289,14 @@ def display_browse_comments(chat_id, c_num):
                 ref_snippet = "Comment"
             if len(ref_snippet) > 25:
                 ref_snippet = ref_snippet[:22] + "..."
-            reply_header = f"⤷ <i>In reply to #{c_reply_to + 1}: \"{html.escape(ref_snippet)}\"</i>\n"
+            reply_header = f"⤷ <i>In reply to #{c_reply_to + 1}: \"{html.escape(str(ref_snippet))}\"</i>\n"
 
-        date_str = f" • <small>{html.escape(c_date)}</small>" if c_date else ""
+        date_str = f" • <small>{html.escape(str(c_date))}</small>" if c_date else ""
         user_info = f"👤 <b>Anonymous</b> ⚡️ {c_aura} Aura{date_str}"
 
-        # 3. Render Sticker, GIF, or Text reliably
         try:
             if c_type == "sticker" and c_file_id:
-                bot.send_message(chat_id, f"{reply_header}#{idx + 1} {user_info}:")
+                bot.send_message(chat_id, f"{reply_header}#{idx + 1} {user_info}:", parse_mode="HTML")
                 bot.send_sticker(chat_id, c_file_id)
                 bot.send_message(
                     chat_id,
@@ -307,7 +304,7 @@ def display_browse_comments(chat_id, c_num):
                     reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes)
                 )
             elif c_type == "animation" and c_file_id:
-                bot.send_message(chat_id, f"{reply_header}#{idx + 1} {user_info}:")
+                bot.send_message(chat_id, f"{reply_header}#{idx + 1} {user_info}:", parse_mode="HTML")
                 bot.send_animation(chat_id, c_file_id)
                 bot.send_message(
                     chat_id,
@@ -315,23 +312,35 @@ def display_browse_comments(chat_id, c_num):
                     reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes)
                 )
             else:
-                safe_text = html.escape(c_text if c_text else "[Comment]")
-                text = (
+                clean_text = html.escape(str(c_text)) if c_text else "[Comment]"
+                body_message = (
                     f"{reply_header}"
-                    f"#{idx + 1} 💬 \"{safe_text}\"\n\n"
+                    f"<b>#{idx + 1}</b> 💬 \"{clean_text}\"\n\n"
                     f"{user_info}"
                 )
                 bot.send_message(
                     chat_id,
-                    text,
-                    reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes)
+                    body_message,
+                    reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes),
+                    parse_mode="HTML"
                 )
-        except Exception as err:
-            print(f"[Error rendering comment #{idx + 1}]: {err}")
+        except Exception as e:
+            print(f"[Error rendering comment #{idx + 1}]: {e}")
+            try:
+                # Safe plain text fallback to guarantee message appearance
+                fallback_msg = f"#{idx + 1}: {c_text}\n(Anonymous)"
+                bot.send_message(
+                    chat_id,
+                    fallback_msg,
+                    reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes),
+                    parse_mode=None
+                )
+            except Exception as e2:
+                print(f"[Fatal rendering error]: {e2}")
 
     bottom_markup = types.InlineKeyboardMarkup()
     bottom_markup.add(types.InlineKeyboardButton("➕ Add Your Comment", callback_data=f"hub_add_{c_num}"))
-    bot.send_message(chat_id, f"Displayed {total} comment(s).", reply_markup=bottom_markup)
+    bot.send_message(chat_id, f"Displaying {total} comment(s).", reply_markup=bottom_markup, parse_mode="HTML")
 
 # ---------- START COMMAND & DEEP LINKING ----------
 
@@ -346,7 +355,6 @@ def handle_start(message):
     raw_text = message.text or ""
     parts = raw_text.strip().split()
 
-    # Deep-link clicked from channel: /start comm_X
     if len(parts) > 1 and "comm_" in parts[1]:
         try:
             c_num_str = parts[1].split("comm_")[1].strip()
@@ -362,7 +370,7 @@ def handle_start(message):
 
     user["state"] = "IDLE"
     welcome_text = "Welcome! Use Confess to submit confessions"
-    bot.send_message(uid, welcome_text, reply_markup=main_menu_keyboard())
+    bot.send_message(uid, welcome_text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
 
 # ---------- MAIN MENU BUTTONS ----------
 
@@ -371,10 +379,9 @@ def handle_confess_button(message):
     uid = message.chat.id
     now = time.time()
     
-    # 20-second cooldown
     if now - rate_limit_cache.get(uid, 0) < 20:
         remaining = int(20 - (now - rate_limit_cache.get(uid, 0)))
-        bot.send_message(uid, f"⏳ Please wait {remaining} seconds before submitting another confession.")
+        bot.send_message(uid, f"⏳ Please wait {remaining} seconds before submitting another confession.", parse_mode="HTML")
         return
 
     user = users_data.setdefault(uid, {"aura": 0})
@@ -383,7 +390,7 @@ def handle_confess_button(message):
     user["categories"] = []
     user["reply_to_idx"] = None
     msg = "Please send the text of your confession. You will be able to review, edit, or enhance it next"
-    bot.send_message(uid, msg, reply_markup=cancel_reply_keyboard())
+    bot.send_message(uid, msg, reply_markup=cancel_reply_keyboard(), parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text == "❌ Cancel")
 def handle_cancel_button(message):
@@ -394,7 +401,7 @@ def handle_cancel_button(message):
         users_data[uid]["text"] = ""
         users_data[uid]["target_confession"] = None
         users_data[uid]["reply_to_idx"] = None
-    bot.send_message(uid, "Action cancelled. You are back at the main menu.", reply_markup=main_menu_keyboard())
+    bot.send_message(uid, "Action cancelled. You are back at the main menu.", reply_markup=main_menu_keyboard(), parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text == "👤 Profile")
 def handle_profile_button(message):
@@ -406,7 +413,7 @@ def handle_profile_button(message):
         "👥 <b>Followers:</b> 0 | <b>Following:</b> 0\n\n"
         "<i>No bio set</i>"
     )
-    bot.send_message(uid, profile_text, reply_markup=profile_inline_markup())
+    bot.send_message(uid, profile_text, reply_markup=profile_inline_markup(), parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text == "ℹ️ Help")
 def handle_help_button(message):
@@ -416,7 +423,7 @@ def handle_help_button(message):
         "• Submissions and comments are 100% anonymous.\n"
         "• Respect community guidelines: No names, no doxxing, no hate speech."
     )
-    bot.send_message(message.chat.id, help_text, reply_markup=main_menu_keyboard())
+    bot.send_message(message.chat.id, help_text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
 
 # ---------- MEDIA & TEXT COMMENT HANDLER ----------
 
@@ -431,15 +438,15 @@ def handle_incoming_messages(message):
     # Confession submission text
     if user.get("state") == "WAITING_TEXT":
         if message.content_type != "text":
-            bot.send_message(uid, "⚠ Confessions must be sent as text.")
+            bot.send_message(uid, "⚠ Confessions must be sent as text.", parse_mode="HTML")
             return
 
         raw_text = message.text.strip()
         if len(raw_text) < 10:
-            bot.send_message(uid, "⚠️ Your confession is too short. Please provide at least 10 characters.")
+            bot.send_message(uid, "⚠️ Your confession is too short. Please provide at least 10 characters.", parse_mode="HTML")
             return
         if len(raw_text) > 1500:
-            bot.send_message(uid, "⚠️ Your confession exceeds the 1,500 character limit.")
+            bot.send_message(uid, "⚠️ Your confession exceeds the 1,500 character limit.", parse_mode="HTML")
             return
 
         user["text"] = raw_text
@@ -451,20 +458,19 @@ def handle_incoming_messages(message):
             f"<i>{preview_body}</i>\n\n"
             "Please review it and choose an option below."
         )
-        bot.send_message(uid, preview_text, reply_markup=preview_inline_markup())
+        bot.send_message(uid, preview_text, reply_markup=preview_inline_markup(), parse_mode="HTML")
 
-    # Comment submission (text, sticker, or GIF)
+    # Comment submission (text, sticker, or animation)
     elif user.get("state") == "WAITING_COMMENT":
         target = user.get("target_confession")
         if not target:
-            bot.send_message(uid, "Session expired. Please click '💬 View / Add Comments' from the channel again.", reply_markup=main_menu_keyboard())
+            bot.send_message(uid, "Session expired. Please click '💬 View / Add Comments' from the channel again.", reply_markup=main_menu_keyboard(), parse_mode="HTML")
             user["state"] = "IDLE"
             return
 
         c_key = str(target)
         reply_to = user.get("reply_to_idx")
 
-        # Build comment object
         new_comment = {
             "aura": user.get("aura", 0),
             "likes": 0,
@@ -488,7 +494,6 @@ def handle_incoming_messages(message):
         # Save to database
         store = load_comments_store()
         if c_key not in store or not isinstance(store[c_key], list):
-            # If older format had a dict with 'comments' key, convert or preserve
             if isinstance(store.get(c_key), dict):
                 store[c_key] = store[c_key].get("comments", [])
             else:
@@ -497,14 +502,14 @@ def handle_incoming_messages(message):
         store[c_key].append(new_comment)
         save_comments_store(store)
 
-        # Real-time counter update on the public channel post!
+        # Real-time counter update on the channel post
         update_channel_comment_count(c_key)
 
         user["aura"] = user.get("aura", 0) + 2
         user["state"] = "IDLE"
         user["reply_to_idx"] = None
 
-        bot.send_message(uid, "✅ <b>Your anonymous comment has been posted!</b>", reply_markup=main_menu_keyboard())
+        bot.send_message(uid, "✅ <b>Your anonymous comment has been posted!</b>", reply_markup=main_menu_keyboard(), parse_mode="HTML")
         display_browse_comments(uid, c_key)
 
 # ---------- INLINE CALLBACK HANDLERS ----------
@@ -518,7 +523,6 @@ def handle_callbacks(call):
         "aura": 0, "target_confession": None, "reply_to_idx": None
     })
 
-    # Hub Action: Add Comment
     if data.startswith("hub_add_"):
         c_num = data.replace("hub_add_", "")
         user["state"] = "WAITING_COMMENT"
@@ -533,16 +537,14 @@ def handle_callbacks(call):
             "• 🎬 <b>GIF / Animation</b>\n\n"
             "<i>Everything you post is 100% anonymous!</i>"
         )
-        bot.send_message(uid, prompt_msg, reply_markup=cancel_reply_keyboard())
+        bot.send_message(uid, prompt_msg, reply_markup=cancel_reply_keyboard(), parse_mode="HTML")
         bot.answer_callback_query(call.id)
 
-    # Hub Action: Browse Comments
     elif data.startswith("hub_browse_"):
         c_num = data.replace("hub_browse_", "")
         display_browse_comments(uid, c_num)
         bot.answer_callback_query(call.id)
 
-    # Confession drafting
     elif data == "btn_edit":
         user["state"] = "WAITING_TEXT"
         bot.edit_message_text("Please send the updated text of your confession:", chat_id=uid, message_id=call.message.message_id)
@@ -557,7 +559,7 @@ def handle_callbacks(call):
             bot.delete_message(chat_id=uid, message_id=call.message.message_id)
         except Exception:
             pass
-        bot.send_message(uid, "Action cancelled. You are back at the main menu.", reply_markup=main_menu_keyboard())
+        bot.send_message(uid, "Action cancelled. You are back at the main menu.", reply_markup=main_menu_keyboard(), parse_mode="HTML")
 
     elif data == "btn_submit":
         user["categories"] = []
@@ -595,7 +597,7 @@ def handle_callbacks(call):
         
         safe_body = html.escape(confession_body)
         admin_card = f"<b>Pending Confession</b>\n\n{safe_body}\n\n{cat_hashtags}"
-        bot.send_message(ADMIN_GROUP_ID, admin_card, reply_markup=admin_markup)
+        bot.send_message(ADMIN_GROUP_ID, admin_card, reply_markup=admin_markup, parse_mode="HTML")
 
         try:
             bot.delete_message(chat_id=uid, message_id=call.message.message_id)
@@ -608,10 +610,10 @@ def handle_callbacks(call):
         user["categories"] = []
         user["text"] = ""
 
-        bot.send_message(uid, "✅ Your confession has been submitted and is pending review.", reply_markup=main_menu_keyboard())
+        bot.send_message(uid, "✅ Your confession has been submitted and is pending review.", reply_markup=main_menu_keyboard(), parse_mode="HTML")
 
     elif data.startswith("adm_rej_"):
-        bot.edit_message_text("❌ <b>Submission Rejected.</b>", chat_id=call.message.chat.id, message_id=call.message.message_id)
+        bot.edit_message_text("❌ <b>Submission Rejected.</b>", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML")
 
     elif data.startswith("adm_app_"):
         global confession_counter
@@ -633,10 +635,10 @@ def handle_callbacks(call):
         channel_msg = bot.send_message(
             CHANNEL_ID,
             channel_post,
-            reply_markup=channel_comment_button(current_num, 0)
+            reply_markup=channel_comment_button(current_num, 0),
+            parse_mode="HTML"
         )
 
-        # Store channel post mapping
         posts = load_posts_map()
         posts[str(current_num)] = channel_msg.message_id
         save_posts_map(posts)
@@ -644,7 +646,8 @@ def handle_callbacks(call):
         try:
             bot.send_message(
                 int(target_uid),
-                f"🎉 <b>Your confession has been approved and published!</b>\n\nIt is now live as <b>Confession #{current_num}</b> on {CHANNEL_ID}."
+                f"🎉 <b>Your confession has been approved and published!</b>\n\nIt is now live as <b>Confession #{current_num}</b> on {CHANNEL_ID}.",
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -652,13 +655,13 @@ def handle_callbacks(call):
         bot.edit_message_text(
             f"✅ <b>Published as Confession #{current_num}</b>\n\n{safe_body}\n\n{hashtags}",
             chat_id=call.message.chat.id,
-            message_id=call.message.message_id
+            message_id=call.message.message_id,
+            parse_mode="HTML"
         )
 
         confession_counter = current_num + 1
         save_counter(confession_counter)
 
-    # Likes & Dislikes (supports strings and dictionary items)
     elif data.startswith("like_") or data.startswith("dislike_"):
         action, c_num, idx_str = data.split("_")
         idx = int(idx_str)
@@ -675,7 +678,6 @@ def handle_callbacks(call):
 
         if idx < len(comments_list):
             target_c = comments_list[idx]
-            # Convert plain string to dict on first interaction
             if isinstance(target_c, str):
                 target_c = {"text": target_c, "aura": 0, "likes": 0, "dislikes": 0, "type": "text"}
                 comments_list[idx] = target_c
@@ -694,7 +696,6 @@ def handle_callbacks(call):
             )
             bot.answer_callback_query(call.id, "Reaction recorded!")
 
-    # Reply to specific comment
     elif data.startswith("rep_"):
         _, c_num, idx_str = data.split("_")
         idx = int(idx_str)
@@ -715,7 +716,8 @@ def handle_callbacks(call):
         bot.send_message(
             uid,
             f"✍️ <b>Replying {preview_ref}:</b>\n\nSend your text, sticker, or GIF reply:",
-            reply_markup=cancel_reply_keyboard()
+            reply_markup=cancel_reply_keyboard(),
+            parse_mode="HTML"
         )
         bot.answer_callback_query(call.id)
 
