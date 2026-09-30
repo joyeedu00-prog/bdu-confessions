@@ -2,6 +2,27 @@ import os
 import json
 import telebot
 from telebot import types
+from threading import Thread
+from flask import Flask
+
+# --- MINI WEB SERVER (Keeps Render Awake) ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "BDU Confessions Bot is running 24/7!"
+
+def run_web():
+    # Render provides PORT in environment or defaults to 8080
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_web)
+    t.daemon = True
+    t.start()
+
+keep_alive()
 
 # ---------------- CONFIGURATION ----------------
 BOT_TOKEN = "8709978309:AAFQj1-8lauK_j8SNtOUxrL6GGzHVAbaWSI"
@@ -12,12 +33,10 @@ BOT_USERNAME = "bdu_new_confessions_bot"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Persistent storage files
 COUNTER_FILE = "confession_count.txt"
 COMMENTS_FILE = "confession_comments.json"
 POSTS_MAP_FILE = "confession_posts.json"
 
-# --- 1. Counter Persistence ---
 if os.path.exists(COUNTER_FILE):
     try:
         with open(COUNTER_FILE, "r") as f:
@@ -31,7 +50,6 @@ def save_counter(num):
     with open(COUNTER_FILE, "w") as f:
         f.write(str(num))
 
-# --- 2. Comments Database Persistence ---
 if os.path.exists(COMMENTS_FILE):
     try:
         with open(COMMENTS_FILE, "r", encoding="utf-8") as f:
@@ -45,7 +63,6 @@ def save_comments():
     with open(COMMENTS_FILE, "w", encoding="utf-8") as f:
         json.dump(comments_db, f, ensure_ascii=False, indent=2)
 
-# --- 3. Channel Post ID Map Persistence (confession_num -> channel_message_id) ---
 if os.path.exists(POSTS_MAP_FILE):
     try:
         with open(POSTS_MAP_FILE, "r", encoding="utf-8") as f:
@@ -67,8 +84,6 @@ ALL_CATEGORIES = [
     "Harassment", "Crush", "Health", "Trauma",
     "Sexual", "Other"
 ]
-
-# ---------- KEYBOARDS ----------
 
 def persistent_reply_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -108,7 +123,7 @@ def profile_inline_markup():
                types.InlineKeyboardButton("💬 My Comments", callback_data="prof_comments"))
     markup.row(types.InlineKeyboardButton("👥 Following", callback_data="prof_following"),
                types.InlineKeyboardButton("👥 Followers", callback_data="prof_followers"))
-    markup.row(types.InlineKeyboardButton("⚙️️ Settings", callback_data="prof_settings"))
+    markup.row(types.InlineKeyboardButton("⚙️ Settings", callback_data="prof_settings"))
     markup.row(types.InlineKeyboardButton("💬 My Chats", callback_data="prof_chats"))
     return markup
 
@@ -127,14 +142,11 @@ def channel_comment_button(c_num, count):
     markup.add(types.InlineKeyboardButton(f"💬 View / Add Comments ({count})", url=comment_url))
     return markup
 
-# ---------- HELPER: LIVE UPDATE CHANNEL BUTTON ----------
-
 def update_channel_comment_count(c_num):
     c_key = str(c_num)
     msg_id = posts_map.get(c_key)
     if not msg_id:
         return
-    
     count = len(comments_db.get(c_key, []))
     try:
         bot.edit_message_reply_markup(
@@ -143,9 +155,7 @@ def update_channel_comment_count(c_num):
             reply_markup=channel_comment_button(c_num, count)
         )
     except Exception:
-        pass  # Post might be deleted or unmodified
-
-# ---------- COMMENT SECTION VIEWER ----------
+        pass
 
 def display_comment_thread(chat_id, c_num):
     c_key = str(c_num)
@@ -176,13 +186,7 @@ def display_comment_thread(chat_id, c_num):
 
     footer_markup = types.InlineKeyboardMarkup()
     footer_markup.add(types.InlineKeyboardButton("➕ Add Comment", callback_data=f"write_comm_{c_num}"))
-    bot.send_message(
-        chat_id,
-        f"Displaying page 1/1. Total {total} Comments",
-        reply_markup=footer_markup
-    )
-
-# ---------- HANDLERS ----------
+    bot.send_message(chat_id, f"Displaying page 1/1. Total {total} Comments", reply_markup=footer_markup)
 
 @bot.message_handler(commands=['start'])
 def handle_start(message):
@@ -208,11 +212,9 @@ def handle_confess_button(message):
     uid = message.chat.id
     if uid not in users_data:
         users_data[uid] = {"aura": 0}
-    
     users_data[uid]["state"] = "WAITING_TEXT"
     users_data[uid]["text"] = ""
     users_data[uid]["categories"] = []
-    
     msg = "Please send the text of your confession. You will be able to review, edit, or enhance it next"
     bot.send_message(uid, msg, reply_markup=cancel_reply_keyboard())
 
@@ -247,7 +249,6 @@ def handle_help_button(message):
     )
     bot.send_message(message.chat.id, help_text, reply_markup=persistent_reply_keyboard(), parse_mode="Markdown")
 
-# Handle Confession / Comment Input
 @bot.message_handler(func=lambda m: m.chat.type == 'private')
 def handle_text_inputs(message):
     uid = message.chat.id
@@ -259,11 +260,7 @@ def handle_text_inputs(message):
     if user.get("state") == "WAITING_TEXT":
         user["text"] = message.text
         user["state"] = "PREVIEW"
-        preview_text = (
-            "Here is a preview of your confession:\n\n"
-            f"_{message.text}_\n\n"
-            "Please review it and choose an option below."
-        )
+        preview_text = f"Here is a preview of your confession:\n\n_{message.text}_\n\nPlease review it and choose an option below."
         bot.send_message(uid, preview_text, reply_markup=preview_inline_markup(), parse_mode="Markdown")
 
     elif user.get("state") == "WAITING_COMMENT":
@@ -278,17 +275,13 @@ def handle_text_inputs(message):
             comments_db[c_num] = []
         comments_db[c_num].append(new_comment)
         save_comments()
-
-        # Update the button counter live on the channel
         update_channel_comment_count(c_num)
 
         user["aura"] = user.get("aura", 0) + 2
         user["state"] = "IDLE"
-        
         bot.send_message(uid, "✅ **Your anonymous comment has been posted!**", reply_markup=persistent_reply_keyboard(), parse_mode="Markdown")
         display_comment_thread(uid, c_num)
 
-# Inline Callbacks
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     uid = call.message.chat.id
@@ -369,7 +362,6 @@ def handle_callbacks(call):
 
         channel_post = f"**Confession #{confession_counter}**\n\n{body}\n\n{hashtags}"
 
-        # Post to channel with initial (0) count button
         channel_msg = bot.send_message(
             CHANNEL_ID,
             channel_post,
@@ -377,11 +369,9 @@ def handle_callbacks(call):
             parse_mode="Markdown"
         )
 
-        # Store channel message ID to update the button live when users comment
         posts_map[str(confession_counter)] = channel_msg.message_id
         save_posts_map()
 
-        # Notify submitter privately
         try:
             bot.send_message(
                 target_uid,
@@ -391,7 +381,6 @@ def handle_callbacks(call):
         except Exception:
             pass
 
-        # Update admin group card
         bot.edit_message_text(
             f"✅ **Published as Confession #{confession_counter}**\n\n{body}\n\n{hashtags}",
             chat_id=call.message.chat.id,
@@ -400,14 +389,12 @@ def handle_callbacks(call):
         confession_counter += 1
         save_counter(confession_counter)
 
-    # Comments: Trigger writing
     elif data.startswith("write_comm_"):
         c_num = data.replace("write_comm_", "")
         user["state"] = "WAITING_COMMENT"
         user["target_confession"] = c_num
         bot.send_message(uid, f"✍️ Type your anonymous comment for **Confession #{c_num}**:", reply_markup=cancel_reply_keyboard(), parse_mode="Markdown")
 
-    # Comments: Like / Dislike reactions
     elif data.startswith("like_") or data.startswith("dislike_"):
         action, c_num, idx_str = data.split("_")
         idx = int(idx_str)
