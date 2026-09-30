@@ -8,7 +8,7 @@ import telebot
 from telebot import types
 
 # ---------------- CONFIGURATION ----------------
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8709978309:AAHlT2HMXwyDkRR181F4SMvIRX8hrVvwGgo")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8709978309:AAFTdpdj9Y_S-O0NykrrD2oXx8GLwvk8TBU")
 ADMIN_GROUP_ID = int(os.environ.get("ADMIN_GROUP_ID", "-1004308348205"))
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@bduconfession00")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "bdu_new_confessions_bot")
@@ -29,9 +29,9 @@ def run_web():
     web_app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
-    t = Thread(target=run_web)
-    t.daemon = True
-    t.start()
+    server_thread = Thread(target=run_web)
+    server_thread.daemon = True
+    server_thread.start()
 
 keep_alive()
 
@@ -184,9 +184,14 @@ def update_channel_comment_count(c_num):
     msg_id = posts.get(c_key)
     
     comments_store = load_comments_store()
-    comments_list = comments_store.get(c_key, [])
-    if isinstance(comments_list, dict):
-        comments_list = comments_list.get("comments", [])
+    raw_entry = comments_store.get(c_key, [])
+    if isinstance(raw_entry, dict):
+        comments_list = raw_entry.get("comments", [])
+    elif isinstance(raw_entry, list):
+        comments_list = raw_entry
+    else:
+        comments_list = []
+        
     total_comments = len(comments_list)
 
     if not msg_id:
@@ -208,9 +213,14 @@ def update_channel_comment_count(c_num):
 def show_confession_hub(chat_id, c_num):
     c_key = str(c_num)
     comments_store = load_comments_store()
-    comments_list = comments_store.get(c_key, [])
-    if isinstance(comments_list, dict):
-        comments_list = comments_list.get("comments", [])
+    raw_entry = comments_store.get(c_key, [])
+    if isinstance(raw_entry, dict):
+        comments_list = raw_entry.get("comments", [])
+    elif isinstance(raw_entry, list):
+        comments_list = raw_entry
+    else:
+        comments_list = []
+        
     count = len(comments_list)
 
     hub_text = (
@@ -222,9 +232,16 @@ def show_confession_hub(chat_id, c_num):
 def display_browse_comments(chat_id, c_num):
     c_key = str(c_num)
     comments_store = load_comments_store()
-    comments_list = comments_store.get(c_key, [])
-    if isinstance(comments_list, dict):
-        comments_list = comments_list.get("comments", [])
+    raw_entry = comments_store.get(c_key, [])
+    
+    # Normalize list vs dictionary structures
+    if isinstance(raw_entry, dict):
+        comments_list = raw_entry.get("comments", [])
+    elif isinstance(raw_entry, list):
+        comments_list = raw_entry
+    else:
+        comments_list = []
+
     total = len(comments_list)
 
     if total == 0:
@@ -240,53 +257,77 @@ def display_browse_comments(chat_id, c_num):
     bot.send_message(chat_id, f"💬 <b>Discussion for Confession #{c_num} ({total} comments):</b>")
 
     for idx, c in enumerate(comments_list):
-        c_type = c.get("type", "text")
-        reply_to_idx = c.get("reply_to")
+        # 1. Normalize individual comment formats (handles string, old dict, new dict)
+        if isinstance(c, str):
+            c_text = c
+            c_type = "text"
+            c_aura = 0
+            c_likes = 0
+            c_dislikes = 0
+            c_date = ""
+            c_reply_to = None
+            c_file_id = None
+        elif isinstance(c, dict):
+            c_text = c.get("text", "")
+            c_type = c.get("type", "text")
+            c_aura = c.get("aura", 0)
+            c_likes = c.get("likes", 0)
+            c_dislikes = c.get("dislikes", 0)
+            c_date = c.get("timestamp", "")
+            c_reply_to = c.get("reply_to")
+            c_file_id = c.get("file_id")
+        else:
+            continue
+
+        # 2. Threaded reply header
         reply_header = ""
-        if reply_to_idx is not None and reply_to_idx < len(comments_list):
-            ref_c = comments_list[reply_to_idx]
-            ref_snippet = ref_c.get("text", "Media")
+        if c_reply_to is not None and isinstance(c_reply_to, int) and c_reply_to < len(comments_list):
+            ref_c = comments_list[c_reply_to]
+            if isinstance(ref_c, str):
+                ref_snippet = ref_c
+            elif isinstance(ref_c, dict):
+                ref_snippet = ref_c.get("text", "Media")
+            else:
+                ref_snippet = "Comment"
             if len(ref_snippet) > 25:
                 ref_snippet = ref_snippet[:22] + "..."
-            reply_header = f"⤷ <i>In reply to #{reply_to_idx + 1}: \"{html.escape(ref_snippet)}\"</i>\n"
+            reply_header = f"⤷ <i>In reply to #{c_reply_to + 1}: \"{html.escape(ref_snippet)}\"</i>\n"
 
-        safe_date = html.escape(c.get("timestamp", ""))
-        date_str = f" • <small>{safe_date}</small>" if safe_date else ""
-        user_info = f"👤 <b>Anonymous</b> ⚡️ {c.get('aura', 0)} Aura{date_str}"
+        date_str = f" • <small>{html.escape(c_date)}</small>" if c_date else ""
+        user_info = f"👤 <b>Anonymous</b> ⚡️ {c_aura} Aura{date_str}"
 
-        # If it's a sticker comment
-        if c_type == "sticker":
-            bot.send_message(chat_id, f"{reply_header}#{idx + 1} {user_info}:")
-            bot.send_sticker(chat_id, c["file_id"])
-            bot.send_message(
-                chat_id,
-                f"Actions for comment #{idx + 1}:",
-                reply_markup=comment_action_markup(c_num, idx, c.get("likes", 0), c.get("dislikes", 0))
-            )
-
-        # If it's a GIF comment
-        elif c_type == "animation":
-            bot.send_message(chat_id, f"{reply_header}#{idx + 1} {user_info}:")
-            bot.send_animation(chat_id, c["file_id"])
-            bot.send_message(
-                chat_id,
-                f"Actions for comment #{idx + 1}:",
-                reply_markup=comment_action_markup(c_num, idx, c.get("likes", 0), c.get("dislikes", 0))
-            )
-
-        # Standard text comment
-        else:
-            safe_text = html.escape(c.get("text", ""))
-            text = (
-                f"{reply_header}"
-                f"#{idx + 1} 💬 \"{safe_text}\"\n\n"
-                f"{user_info}"
-            )
-            bot.send_message(
-                chat_id,
-                text,
-                reply_markup=comment_action_markup(c_num, idx, c.get("likes", 0), c.get("dislikes", 0))
-            )
+        # 3. Render Sticker, GIF, or Text reliably
+        try:
+            if c_type == "sticker" and c_file_id:
+                bot.send_message(chat_id, f"{reply_header}#{idx + 1} {user_info}:")
+                bot.send_sticker(chat_id, c_file_id)
+                bot.send_message(
+                    chat_id,
+                    f"Actions for comment #{idx + 1}:",
+                    reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes)
+                )
+            elif c_type == "animation" and c_file_id:
+                bot.send_message(chat_id, f"{reply_header}#{idx + 1} {user_info}:")
+                bot.send_animation(chat_id, c_file_id)
+                bot.send_message(
+                    chat_id,
+                    f"Actions for comment #{idx + 1}:",
+                    reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes)
+                )
+            else:
+                safe_text = html.escape(c_text if c_text else "[Comment]")
+                text = (
+                    f"{reply_header}"
+                    f"#{idx + 1} 💬 \"{safe_text}\"\n\n"
+                    f"{user_info}"
+                )
+                bot.send_message(
+                    chat_id,
+                    text,
+                    reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes)
+                )
+        except Exception as err:
+            print(f"[Error rendering comment #{idx + 1}]: {err}")
 
     bottom_markup = types.InlineKeyboardMarkup()
     bottom_markup.add(types.InlineKeyboardButton("➕ Add Your Comment", callback_data=f"hub_add_{c_num}"))
@@ -390,7 +431,7 @@ def handle_incoming_messages(message):
     # Confession submission text
     if user.get("state") == "WAITING_TEXT":
         if message.content_type != "text":
-            bot.send_message(uid, "⚠️️ Confessions must be sent as text.")
+            bot.send_message(uid, "⚠ Confessions must be sent as text.")
             return
 
         raw_text = message.text.strip()
@@ -447,7 +488,12 @@ def handle_incoming_messages(message):
         # Save to database
         store = load_comments_store()
         if c_key not in store or not isinstance(store[c_key], list):
-            store[c_key] = []
+            # If older format had a dict with 'comments' key, convert or preserve
+            if isinstance(store.get(c_key), dict):
+                store[c_key] = store[c_key].get("comments", [])
+            else:
+                store[c_key] = []
+                
         store[c_key].append(new_comment)
         save_comments_store(store)
 
@@ -612,26 +658,39 @@ def handle_callbacks(call):
         confession_counter = current_num + 1
         save_counter(confession_counter)
 
-    # Likes & Dislikes
+    # Likes & Dislikes (supports strings and dictionary items)
     elif data.startswith("like_") or data.startswith("dislike_"):
         action, c_num, idx_str = data.split("_")
         idx = int(idx_str)
         store = load_comments_store()
         c_key = str(c_num)
 
-        comments_list = store.get(c_key, [])
+        raw_entry = store.get(c_key, [])
+        if isinstance(raw_entry, dict):
+            comments_list = raw_entry.get("comments", [])
+        elif isinstance(raw_entry, list):
+            comments_list = raw_entry
+        else:
+            comments_list = []
+
         if idx < len(comments_list):
+            target_c = comments_list[idx]
+            # Convert plain string to dict on first interaction
+            if isinstance(target_c, str):
+                target_c = {"text": target_c, "aura": 0, "likes": 0, "dislikes": 0, "type": "text"}
+                comments_list[idx] = target_c
+
             if action == "like":
-                comments_list[idx]["likes"] = comments_list[idx].get("likes", 0) + 1
+                target_c["likes"] = target_c.get("likes", 0) + 1
             else:
-                comments_list[idx]["dislikes"] = comments_list[idx].get("dislikes", 0) + 1
+                target_c["dislikes"] = target_c.get("dislikes", 0) + 1
+            
             save_comments_store(store)
 
-            c = comments_list[idx]
             bot.edit_message_reply_markup(
                 chat_id=uid,
                 message_id=call.message.message_id,
-                reply_markup=comment_action_markup(c_num, idx, c["likes"], c["dislikes"])
+                reply_markup=comment_action_markup(c_num, idx, target_c.get("likes", 0), target_c.get("dislikes", 0))
             )
             bot.answer_callback_query(call.id, "Reaction recorded!")
 
@@ -644,10 +703,13 @@ def handle_callbacks(call):
         user["reply_to_idx"] = idx
 
         store = load_comments_store()
-        comments_list = store.get(str(c_num), [])
+        raw_entry = store.get(str(c_num), [])
+        comments_list = raw_entry.get("comments", []) if isinstance(raw_entry, dict) else raw_entry if isinstance(raw_entry, list) else []
+
         preview_ref = ""
         if idx < len(comments_list):
-            snippet = comments_list[idx].get("text", "Media")
+            c_item = comments_list[idx]
+            snippet = c_item if isinstance(c_item, str) else c_item.get("text", "Media")
             preview_ref = f"to comment #{idx + 1} (<i>\"{html.escape(snippet[:30])}\"</i>)"
 
         bot.send_message(
