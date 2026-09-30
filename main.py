@@ -545,4 +545,7 @@ try:
 except Exception as e:
     print(f"Webhook clearance notice: {e}")
 
+# Pause 5 seconds to ensure Telegram clears old getUpdates locks
+time.sleep(5)
+
 bot.infinity_polling(skip_pending=True)
