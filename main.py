@@ -12,11 +12,12 @@ BOT_USERNAME = "bdu_new_confessions_bot"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Persistent files
+# Persistent storage files
 COUNTER_FILE = "confession_count.txt"
 COMMENTS_FILE = "confession_comments.json"
+POSTS_MAP_FILE = "confession_posts.json"
 
-# Load Counter
+# --- 1. Counter Persistence ---
 if os.path.exists(COUNTER_FILE):
     try:
         with open(COUNTER_FILE, "r") as f:
@@ -30,7 +31,7 @@ def save_counter(num):
     with open(COUNTER_FILE, "w") as f:
         f.write(str(num))
 
-# Load Comments Database { confession_id: [ {"id": 1, "text": "...", "aura": 0, "likes": 0, "dislikes": 0} ] }
+# --- 2. Comments Database Persistence ---
 if os.path.exists(COMMENTS_FILE):
     try:
         with open(COMMENTS_FILE, "r", encoding="utf-8") as f:
@@ -43,6 +44,20 @@ else:
 def save_comments():
     with open(COMMENTS_FILE, "w", encoding="utf-8") as f:
         json.dump(comments_db, f, ensure_ascii=False, indent=2)
+
+# --- 3. Channel Post ID Map Persistence (confession_num -> channel_message_id) ---
+if os.path.exists(POSTS_MAP_FILE):
+    try:
+        with open(POSTS_MAP_FILE, "r", encoding="utf-8") as f:
+            posts_map = json.load(f)
+    except Exception:
+        posts_map = {}
+else:
+    posts_map = {}
+
+def save_posts_map():
+    with open(POSTS_MAP_FILE, "w", encoding="utf-8") as f:
+        json.dump(posts_map, f, ensure_ascii=False, indent=2)
 
 users_data = {}
 
@@ -93,7 +108,7 @@ def profile_inline_markup():
                types.InlineKeyboardButton("💬 My Comments", callback_data="prof_comments"))
     markup.row(types.InlineKeyboardButton("👥 Following", callback_data="prof_following"),
                types.InlineKeyboardButton("👥 Followers", callback_data="prof_followers"))
-    markup.row(types.InlineKeyboardButton("⚙️ Settings", callback_data="prof_settings"))
+    markup.row(types.InlineKeyboardButton("⚙️️ Settings", callback_data="prof_settings"))
     markup.row(types.InlineKeyboardButton("💬 My Chats", callback_data="prof_chats"))
     return markup
 
@@ -105,6 +120,30 @@ def comment_action_markup(c_num, c_idx, likes, dislikes):
         types.InlineKeyboardButton("Reply", callback_data=f"rep_{c_num}_{c_idx}")
     )
     return markup
+
+def channel_comment_button(c_num, count):
+    markup = types.InlineKeyboardMarkup()
+    comment_url = f"https://t.me/{BOT_USERNAME}?start=comm_{c_num}"
+    markup.add(types.InlineKeyboardButton(f"💬 View / Add Comments ({count})", url=comment_url))
+    return markup
+
+# ---------- HELPER: LIVE UPDATE CHANNEL BUTTON ----------
+
+def update_channel_comment_count(c_num):
+    c_key = str(c_num)
+    msg_id = posts_map.get(c_key)
+    if not msg_id:
+        return
+    
+    count = len(comments_db.get(c_key, []))
+    try:
+        bot.edit_message_reply_markup(
+            chat_id=CHANNEL_ID,
+            message_id=msg_id,
+            reply_markup=channel_comment_button(c_num, count)
+        )
+    except Exception:
+        pass  # Post might be deleted or unmodified
 
 # ---------- COMMENT SECTION VIEWER ----------
 
@@ -124,7 +163,6 @@ def display_comment_thread(chat_id, c_num):
         )
         return
 
-    # Render each comment bubble
     for idx, c in enumerate(post_comments):
         text = (
             f"💬 {c['text']}\n\n"
@@ -136,7 +174,6 @@ def display_comment_thread(chat_id, c_num):
             reply_markup=comment_action_markup(c_num, idx, c.get("likes", 0), c.get("dislikes", 0))
         )
 
-    # Footer navigation bar
     footer_markup = types.InlineKeyboardMarkup()
     footer_markup.add(types.InlineKeyboardButton("➕ Add Comment", callback_data=f"write_comm_{c_num}"))
     bot.send_message(
@@ -153,7 +190,6 @@ def handle_start(message):
     if uid not in users_data:
         users_data[uid] = {"state": "IDLE", "text": "", "categories": [], "aura": 0}
 
-    # Check deep link (e.g., /start comm_1)
     parts = message.text.split()
     if len(parts) > 1 and parts[1].startswith("comm_"):
         try:
@@ -220,7 +256,6 @@ def handle_text_inputs(message):
         users_data[uid] = {"state": "IDLE", "text": "", "categories": [], "aura": 0}
         user = users_data[uid]
 
-    # Submitting confession body
     if user.get("state") == "WAITING_TEXT":
         user["text"] = message.text
         user["state"] = "PREVIEW"
@@ -231,7 +266,6 @@ def handle_text_inputs(message):
         )
         bot.send_message(uid, preview_text, reply_markup=preview_inline_markup(), parse_mode="Markdown")
 
-    # Submitting anonymous comment
     elif user.get("state") == "WAITING_COMMENT":
         c_num = str(user.get("target_confession"))
         new_comment = {
@@ -244,6 +278,9 @@ def handle_text_inputs(message):
             comments_db[c_num] = []
         comments_db[c_num].append(new_comment)
         save_comments()
+
+        # Update the button counter live on the channel
+        update_channel_comment_count(c_num)
 
         user["aura"] = user.get("aura", 0) + 2
         user["state"] = "IDLE"
@@ -332,13 +369,17 @@ def handle_callbacks(call):
 
         channel_post = f"**Confession #{confession_counter}**\n\n{body}\n\n{hashtags}"
 
-        # AAU style button linked directly to the bot's custom comment screen
-        channel_markup = types.InlineKeyboardMarkup()
-        comment_url = f"https://t.me/{BOT_USERNAME}?start=comm_{confession_counter}"
-        channel_markup.add(types.InlineKeyboardButton("💬 View / Add Comments (0)", url=comment_url))
+        # Post to channel with initial (0) count button
+        channel_msg = bot.send_message(
+            CHANNEL_ID,
+            channel_post,
+            reply_markup=channel_comment_button(confession_counter, 0),
+            parse_mode="Markdown"
+        )
 
-        # Publish to public channel
-        bot.send_message(CHANNEL_ID, channel_post, reply_markup=channel_markup, parse_mode="Markdown")
+        # Store channel message ID to update the button live when users comment
+        posts_map[str(confession_counter)] = channel_msg.message_id
+        save_posts_map()
 
         # Notify submitter privately
         try:
@@ -377,7 +418,6 @@ def handle_callbacks(call):
                 comments_db[c_num][idx]["dislikes"] = comments_db[c_num][idx].get("dislikes", 0) + 1
             save_comments()
             
-            # Live-update reaction counts on the inline keyboard
             c = comments_db[c_num][idx]
             bot.edit_message_reply_markup(
                 chat_id=uid,
