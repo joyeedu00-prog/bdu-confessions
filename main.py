@@ -25,7 +25,7 @@ def keep_alive():
 keep_alive()
 
 # ---------------- CONFIGURATION ----------------
-BOT_TOKEN = "8709978309:AAFQj1-8lauK_j8SNtOUxrL6GGzHVAbaWSI"
+BOT_TOKEN = "8709978309:AAEGy3V5FsVcWtkwsndAVHVd8wy_qnH6MX8"
 ADMIN_GROUP_ID = -1004308348205    # Private Admin review group
 CHANNEL_ID = "@bduconfession00"    # Public channel
 BOT_USERNAME = "bdu_new_confessions_bot"
