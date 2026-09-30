@@ -1,85 +1,105 @@
 import os
 import json
-import html
-import time
-from threading import Thread, Lock
-from flask import Flask
+import logging
 import telebot
 from telebot import types
+from threading import Thread
+from flask import Flask
 
-# ----------------- CONFIGURATION -----------------
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8709978309:AAGvCp4sd7eBBwzhsaCKmXZS-XpoQlRH_-g")
-ADMIN_GROUP_ID = int(os.environ.get("ADMIN_GROUP_ID", "-1004308348205"))
-CHANNEL_ID = os.environ.get("CHANNEL_ID", "@bduconfession00")
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "bdu_new_confessions_bot")
-# -------------------------------------------------
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
-db_lock = Lock()
+# --- MINI WEB SERVER (Keeps Render Alive) ---
+app = Flask('')
 
-# --- MINI WEB SERVER (Keeps Render Free Tier Awake) ---
-web_app = Flask('')
-
-@web_app.route('/')
-def health_check():
-    return "BDU Confessions Engine 24/7 is Live & Healthy!", 200
+@app.route('/')
+def home():
+    return "BDU Confessions Bot is running 24/7!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
-    web_app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
-    server_thread = Thread(target=run_web)
-    server_thread.daemon = True
-    server_thread.start()
+    t = Thread(target=run_web)
+    t.daemon = True
+    t.start()
 
 keep_alive()
 
-# --- FILE NAMES ---
+# ---------------- CONFIGURATION ----------------
+BOT_TOKEN = "8709978309:AAFQj1-8lauK_j8SNtOUxrL6GGzHVAbaWSI"
+ADMIN_GROUP_ID = -1004308348205    # Private Admin review group
+CHANNEL_ID = "@bduconfession00"    # Public channel
+BOT_USERNAME = "bdu_new_confessions_bot"
+# ------------------------------------------------
+
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
+
 COUNTER_FILE = "confession_count.txt"
 COMMENTS_FILE = "confession_comments.json"
+POSTS_MAP_FILE = "confession_posts.json"
 
-# --- PERSISTENCE LOGIC ---
-def get_current_counter():
-    with db_lock:
-        if os.path.exists(COUNTER_FILE):
-            try:
-                with open(COUNTER_FILE, "r", encoding="utf-8") as f:
-                    return int(f.read().strip())
-            except Exception:
-                return 1
-        return 1
+# --- Persistent Counter ---
+def get_counter():
+    if os.path.exists(COUNTER_FILE):
+        try:
+            with open(COUNTER_FILE, "r") as f:
+                return int(f.read().strip())
+        except Exception:
+            return 1
+    return 1
 
 def save_counter(num):
-    with db_lock:
+    try:
+        with open(COUNTER_FILE, "w") as f:
+            f.write(str(num))
+    except Exception as e:
+        print(f"Error saving counter: {e}")
+
+confession_counter = get_counter()
+
+# --- Persistent Comments ---
+def load_comments():
+    if os.path.exists(COMMENTS_FILE):
         try:
-            with open(COUNTER_FILE, "w", encoding="utf-8") as f:
-                f.write(str(num))
-        except Exception as e:
-            print(f"[Error] Failed saving counter: {e}")
+            with open(COMMENTS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
 
-def load_comments_store():
-    with db_lock:
-        if os.path.exists(COMMENTS_FILE):
-            try:
-                with open(COMMENTS_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                return {}
-        return {}
+def save_comments(data):
+    try:
+        with open(COMMENTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving comments: {e}")
 
-def save_comments_store(data):
-    with db_lock:
+comments_db = load_comments()
+
+# --- Persistent Post Mapping (Confession # -> Channel Message ID) ---
+def load_posts_map():
+    if os.path.exists(POSTS_MAP_FILE):
         try:
-            with open(COMMENTS_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[Error] Failed saving comments store: {e}")
+            with open(POSTS_MAP_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
 
+def save_posts_map(data):
+    try:
+        with open(POSTS_MAP_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving posts map: {e}")
+
+posts_map = load_posts_map()
+
+# User session state
 users_data = {}
-rate_limit_cache = {}
 
-# --- ORIGINAL 14 CATEGORIES RESTORED ---
 ALL_CATEGORIES = [
     "Relationship", "Family", "Exam", "School",
     "Friendship", "Religion", "Mental", "Addiction",
@@ -89,7 +109,7 @@ ALL_CATEGORIES = [
 
 # ---------- KEYBOARDS ----------
 
-def main_menu_keyboard():
+def persistent_reply_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.row(types.KeyboardButton("✍️ Confess"))
     markup.row(types.KeyboardButton("👤 Profile"), types.KeyboardButton("ℹ️ Help"))
@@ -100,40 +120,25 @@ def cancel_reply_keyboard():
     markup.row(types.KeyboardButton("❌ Cancel"))
     return markup
 
-def confession_preview_keyboard():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.row(
+def preview_inline_markup():
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
         types.InlineKeyboardButton("✅ Submit", callback_data="btn_submit"),
-        types.InlineKeyboardButton("✍️ Edit", callback_data="btn_edit")
+        types.InlineKeyboardButton("✍️ Edit", callback_data="btn_edit"),
+        types.InlineKeyboardButton("❌ Cancel", callback_data="btn_cancel")
     )
-    markup.row(types.InlineKeyboardButton("❌ Cancel", callback_data="btn_cancel"))
     return markup
 
-def category_selector_keyboard(selected_cats):
+def categories_inline_markup(selected_cats):
     markup = types.InlineKeyboardMarkup(row_width=2)
     buttons = []
     for cat in ALL_CATEGORIES:
-        status_icon = "✅ " if cat in selected_cats else ""
-        buttons.append(types.InlineKeyboardButton(f"{status_icon}{cat}", callback_data=f"toggle_{cat}"))
+        prefix = "✅ " if cat in selected_cats else ""
+        buttons.append(types.InlineKeyboardButton(f"{prefix}{cat}", callback_data=f"toggle_{cat}"))
     markup.add(*buttons)
     count = len(selected_cats)
     markup.row(types.InlineKeyboardButton(f"➡️ Done Selecting ({count}/3)", callback_data="done_cats"))
-    markup.row(types.InlineKeyboardButton("❌ Cancel", callback_data="btn_cancel"))
-    return markup
-
-def channel_comment_button(c_num, count):
-    markup = types.InlineKeyboardMarkup()
-    url = f"https://t.me/{BOT_USERNAME}?start=comm_{c_num}"
-    markup.add(types.InlineKeyboardButton(f"💬 View / Add Comments ({count})", url=url))
-    return markup
-
-def comment_action_keyboard(c_num, c_idx, likes, dislikes):
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    markup.row(
-        types.InlineKeyboardButton(f"👍 {likes}", callback_data=f"like_{c_num}_{c_idx}"),
-        types.InlineKeyboardButton(f"👎 {dislikes}", callback_data=f"dislike_{c_num}_{c_idx}"),
-        types.InlineKeyboardButton("Reply", callback_data=f"rep_{c_num}_{c_idx}")
-    )
+    markup.row(types.InlineKeyboardButton("❌ Cancel Selection", callback_data="btn_cancel"))
     return markup
 
 def profile_inline_markup():
@@ -147,230 +152,191 @@ def profile_inline_markup():
     markup.row(types.InlineKeyboardButton("💬 My Chats", callback_data="prof_chats"))
     return markup
 
+def comment_action_markup(c_num, c_idx, likes, dislikes):
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    markup.row(
+        types.InlineKeyboardButton(f"👍 {likes}", callback_data=f"like_{c_num}_{c_idx}"),
+        types.InlineKeyboardButton(f"👎 {dislikes}", callback_data=f"dislike_{c_num}_{c_idx}"),
+        types.InlineKeyboardButton("Reply", callback_data=f"rep_{c_num}_{c_idx}")
+    )
+    return markup
+
+def channel_comment_button(c_num, count):
+    markup = types.InlineKeyboardMarkup()
+    comment_url = f"https://t.me/{BOT_USERNAME}?start=comm_{c_num}"
+    markup.add(types.InlineKeyboardButton(f"💬 View / Add Comments ({count})", url=comment_url))
+    return markup
+
 # ---------- REAL-TIME CHANNEL BUTTON UPDATE ----------
 
-def update_channel_counter(c_num):
-    store = load_comments_store()
+def update_channel_comment_count(c_num):
     c_key = str(c_num)
-    meta = store.get(c_key, {})
+    msg_id = posts_map.get(c_key)
     
-    msg_id = meta.get("channel_msg_id") if isinstance(meta, dict) else None
+    # Reload freshest data from memory/disk
+    global comments_db
+    total_comments = len(comments_db.get(c_key, []))
     
-    # Handle both new dictionary format and legacy list format
-    if isinstance(meta, dict):
-        comments_list = meta.get("comments", [])
-    elif isinstance(meta, list):
-        comments_list = meta
-    else:
-        comments_list = []
-        
-    count = len(comments_list)
-
     if not msg_id:
-        print(f"[Notice] No channel message ID mapped for Confession #{c_num}.")
+        print(f"[Warning] No message ID found for confession #{c_num}")
         return
 
     try:
         bot.edit_message_reply_markup(
             chat_id=CHANNEL_ID,
             message_id=int(msg_id),
-            reply_markup=channel_comment_button(c_num, count)
+            reply_markup=channel_comment_button(c_num, total_comments)
         )
-        print(f"[Success] Updated Confession #{c_num} live button counter to: ({count})")
+        print(f"[Success] Updated Confession #{c_num} button count to {total_comments}")
     except Exception as e:
-        print(f"[Warning] Could not update channel message markup: {e}")
+        print(f"[Error] Failed to edit channel markup: {e}")
 
 # ---------- COMMENT SECTION VIEWER ----------
 
-def render_comment_thread(chat_id, c_num):
-    store = load_comments_store()
+def display_comment_thread(chat_id, c_num):
     c_key = str(c_num)
-    post_data = store.get(c_key, {})
-
-    # Support backward compatibility if an entry was saved purely as a list
-    if isinstance(post_data, list):
-        comments_list = post_data
-    elif isinstance(post_data, dict):
-        comments_list = post_data.get("comments", [])
-    else:
-        comments_list = []
-
-    total = len(comments_list)
+    global comments_db
+    post_comments = comments_db.get(c_key, [])
+    total = len(post_comments)
 
     if total == 0:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("➕ Add Comment", callback_data=f"write_comm_{c_num}"))
         bot.send_message(
             chat_id,
-            f"💬 <b>Comments for Confession #{c_num}</b>\n\nNo comments yet. Be the first to share your thoughts anonymously!",
-            reply_markup=markup
+            f"💬 *Comments for Confession #{c_num}*\n\nNo comments yet. Be the first to share your thoughts anonymously!",
+            reply_markup=markup,
+            parse_mode="Markdown"
         )
         return
 
-    for idx, c in enumerate(comments_list):
-        safe_comm = html.escape(c.get("text", ""))
-        safe_date = html.escape(c.get("timestamp", ""))
-        date_str = f" • <small>{safe_date}</small>" if safe_date else ""
+    for idx, c in enumerate(post_comments):
         text = (
-            f"💬 {safe_comm}\n\n"
-            f"👤 <b>Anonymous</b> ⚡️ {c.get('aura', 0)} Aura{date_str}"
+            f"💬 {c['text']}\n\n"
+            f"👤 *Anonymous* ⚡️ {c.get('aura', 0)} Aura"
         )
         bot.send_message(
             chat_id,
             text,
-            reply_markup=comment_action_keyboard(c_num, idx, c.get("likes", 0), c.get("dislikes", 0))
+            reply_markup=comment_action_markup(c_num, idx, c.get("likes", 0), c.get("dislikes", 0))
         )
 
-    bottom_markup = types.InlineKeyboardMarkup()
-    bottom_markup.add(types.InlineKeyboardButton("➕ Add Comment", callback_data=f"write_comm_{c_num}"))
-    bot.send_message(chat_id, f"Displaying page 1/1. Total {total} Comments", reply_markup=bottom_markup)
+    footer_markup = types.InlineKeyboardMarkup()
+    footer_markup.add(types.InlineKeyboardButton("➕ Add Comment", callback_data=f"write_comm_{c_num}"))
+    bot.send_message(
+        chat_id,
+        f"Displaying {total} Comment(s)",
+        reply_markup=footer_markup
+    )
 
 # ---------- MESSAGE HANDLERS ----------
 
 @bot.message_handler(commands=['start'])
-def handle_start_command(message):
+def handle_start(message):
     uid = message.chat.id
-    user = users_data.setdefault(uid, {"state": "IDLE", "text": "", "categories": [], "aura": 0, "target_confession": None})
+    if uid not in users_data:
+        users_data[uid] = {"state": "IDLE", "text": "", "categories": [], "aura": 0, "target_confession": None}
 
-    # Robust parsing of deep-linking start argument (e.g. /start comm_12)
-    raw_text = message.text or ""
-    parts = raw_text.strip().split()
-
-    if len(parts) > 1 and "comm_" in parts[1]:
+    parts = message.text.split()
+    if len(parts) > 1 and parts[1].startswith("comm_"):
         try:
-            c_num_str = parts[1].split("comm_")[1].strip()
-            if c_num_str.isdigit():
-                c_num = int(c_num_str)
-                user["target_confession"] = str(c_num)
-                user["state"] = "IDLE"
-                render_comment_thread(uid, c_num)
-                return
+            c_num = int(parts[1].replace("comm_", ""))
+            users_data[uid]["target_confession"] = str(c_num)
+            display_comment_thread(uid, c_num)
+            return
         except Exception as e:
-            print(f"[Error] Deep-link redirection failed: {e}")
+            print(f"Error handling start comm link: {e}")
 
-    user["state"] = "IDLE"
+    users_data[uid]["state"] = "IDLE"
     welcome_text = "Welcome! Use Confess to submit confessions"
-    bot.send_message(uid, welcome_text, reply_markup=main_menu_keyboard())
+    bot.send_message(uid, welcome_text, reply_markup=persistent_reply_keyboard())
 
-@bot.message_handler(func=lambda m: m.text == "✍️ Confess")
-def handle_confess_click(message):
+@bot.message_handler(func=lambda m: m.text == "✍️️ Confess")
+def handle_confess_button(message):
     uid = message.chat.id
-    now = time.time()
-    
-    # 20-second cooldown
-    if now - rate_limit_cache.get(uid, 0) < 20:
-        remaining = int(20 - (now - rate_limit_cache.get(uid, 0)))
-        bot.send_message(uid, f"⏳ Please wait {remaining} seconds before submitting another confession.")
-        return
-
-    user = users_data.setdefault(uid, {"aura": 0})
-    user["state"] = "WAITING_TEXT"
-    user["text"] = ""
-    user["categories"] = []
-
+    if uid not in users_data:
+        users_data[uid] = {"aura": 0}
+    users_data[uid]["state"] = "WAITING_TEXT"
+    users_data[uid]["text"] = ""
+    users_data[uid]["categories"] = []
     msg = "Please send the text of your confession. You will be able to review, edit, or enhance it next"
     bot.send_message(uid, msg, reply_markup=cancel_reply_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "❌ Cancel")
-def handle_cancel_click(message):
+def handle_cancel_button(message):
     uid = message.chat.id
     if uid in users_data:
         users_data[uid]["state"] = "IDLE"
-        users_data[uid]["text"] = ""
         users_data[uid]["categories"] = []
+        users_data[uid]["text"] = ""
         users_data[uid]["target_confession"] = None
-    bot.send_message(uid, "Action cancelled. You are back at the main menu.", reply_markup=main_menu_keyboard())
+    bot.send_message(uid, "Action cancelled. You are back at the main menu.", reply_markup=persistent_reply_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "👤 Profile")
-def handle_profile_click(message):
+def handle_profile_button(message):
     uid = message.chat.id
-    user = users_data.setdefault(uid, {"aura": 0})
-    aura = user.get("aura", 0)
-
+    data = users_data.get(uid, {"aura": 0})
     profile_text = (
-        "<b>None Anonymous</b>\n\n"
-        f"⚡️ <b>Aura:</b> {aura}\n"
-        "👥 <b>Followers:</b> 0 | <b>Following:</b> 0\n\n"
-        "<i>No bio set</i>"
+        "*None Anonymous*\n\n"
+        f"⚡️ *Aura:* {data.get('aura', 0)}\n"
+        f"👥 *Followers:* 0 | *Following:* 0\n\n"
+        "_No bio set_"
     )
-    bot.send_message(uid, profile_text, reply_markup=profile_inline_markup())
+    bot.send_message(uid, profile_text, reply_markup=profile_inline_markup(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "ℹ️ Help")
-def handle_help_click(message):
+def handle_help_button(message):
     help_text = (
-        "ℹ️ <b>BDU Confessions Help</b>\n\n"
-        "• Tap <b>✍️ Confess</b> to submit a secret or campus story.\n"
+        "ℹ️ *BDU Confessions Help*\n\n"
+        "• Tap *✍️️ Confess* to submit a secret or campus story.\n"
         "• Submissions and comments are 100% anonymous.\n"
         "• Respect community guidelines: No names, no doxxing, no hate speech."
     )
-    bot.send_message(message.chat.id, help_text, reply_markup=main_menu_keyboard())
+    bot.send_message(message.chat.id, help_text, reply_markup=persistent_reply_keyboard(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.chat.type == 'private')
-def handle_text_flow(message):
+def handle_text_inputs(message):
     uid = message.chat.id
     user = users_data.setdefault(uid, {"state": "IDLE", "text": "", "categories": [], "aura": 0, "target_confession": None})
-    raw_text = (message.text or "").strip()
 
     if user.get("state") == "WAITING_TEXT":
-        if len(raw_text) < 10:
-            bot.send_message(uid, "⚠️ Your confession is too short. Please provide at least 10 characters.")
-            return
-        if len(raw_text) > 1500:
-            bot.send_message(uid, "⚠️ Your confession exceeds the 1,500 character limit.")
-            return
-
-        user["text"] = raw_text
+        user["text"] = message.text
         user["state"] = "PREVIEW"
-
-        preview_body = html.escape(raw_text)
-        preview_text = (
-            "Here is a preview of your confession:\n\n"
-            f"<i>{preview_body}</i>\n\n"
-            "Please review it and choose an option below."
-        )
-        bot.send_message(uid, preview_text, reply_markup=confession_preview_keyboard())
+        preview_text = f"Here is a preview of your confession:\n\n_{message.text}_\n\nPlease review it and choose an option below."
+        bot.send_message(uid, preview_text, reply_markup=preview_inline_markup(), parse_mode="Markdown")
 
     elif user.get("state") == "WAITING_COMMENT":
         target = user.get("target_confession")
         if not target:
-            bot.send_message(uid, "Session expired. Please click '💬 View / Add Comments' from the channel again.", reply_markup=main_menu_keyboard())
+            bot.send_message(uid, "Session expired. Please click 'View / Add Comments' from the channel again.", reply_markup=persistent_reply_keyboard())
             user["state"] = "IDLE"
             return
 
-        if len(raw_text) < 2:
-            bot.send_message(uid, "⚠️ Comment cannot be empty.")
-            return
-
         c_key = str(target)
-        store = load_comments_store()
-
-        if c_key not in store:
-            store[c_key] = {"channel_msg_id": None, "comments": []}
-        elif isinstance(store[c_key], list):
-            # Convert legacy flat list to dict format
-            store[c_key] = {"channel_msg_id": None, "comments": store[c_key]}
-
-        new_entry = {
-            "text": raw_text,
+        new_comment = {
+            "text": message.text,
             "aura": user.get("aura", 0),
             "likes": 0,
-            "dislikes": 0,
-            "timestamp": time.strftime("%b %d, %H:%M")
+            "dislikes": 0
         }
 
-        store[c_key]["comments"].append(new_entry)
-        save_comments_store(store)
+        global comments_db
+        if c_key not in comments_db:
+            comments_db[c_key] = []
+        
+        comments_db[c_key].append(new_comment)
+        save_comments(comments_db)
 
-        # Update the button count immediately on the channel
-        update_channel_counter(c_key)
+        # Immediately update the channel button live (1, 2, 3...)
+        update_channel_comment_count(c_key)
 
         user["aura"] = user.get("aura", 0) + 2
         user["state"] = "IDLE"
 
-        bot.send_message(uid, "✅ <b>Your anonymous comment has been posted!</b>", reply_markup=main_menu_keyboard())
-        render_comment_thread(uid, c_key)
+        bot.send_message(uid, "✅ *Your anonymous comment has been posted!*", reply_markup=persistent_reply_keyboard(), parse_mode="Markdown")
+        display_comment_thread(uid, c_key)
 
-# ---------- INLINE BUTTON HANDLERS ----------
+# ---------- INLINE CALLBACKS ----------
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -384,23 +350,22 @@ def handle_callbacks(call):
 
     elif data == "btn_cancel":
         user["state"] = "IDLE"
-        user["text"] = ""
         user["categories"] = []
+        user["text"] = ""
         user["target_confession"] = None
         try:
             bot.delete_message(chat_id=uid, message_id=call.message.message_id)
         except Exception:
             pass
-        bot.send_message(uid, "Action cancelled. You are back at the main menu.", reply_markup=main_menu_keyboard())
+        bot.send_message(uid, "Action cancelled. You are back at the main menu.", reply_markup=persistent_reply_keyboard())
 
     elif data == "btn_submit":
         user["categories"] = []
         user["state"] = "CHOOSING_CATEGORIES"
         bot.edit_message_text(
             "Great! Now, please choose categories for your confession.",
-            chat_id=uid,
-            message_id=call.message.message_id,
-            reply_markup=category_selector_keyboard([])
+            chat_id=uid, message_id=call.message.message_id,
+            reply_markup=categories_inline_markup([])
         )
 
     elif data.startswith("toggle_"):
@@ -414,15 +379,11 @@ def handle_callbacks(call):
                 return
             current_cats.append(cat)
         user["categories"] = current_cats
-        bot.edit_message_reply_markup(
-            chat_id=uid,
-            message_id=call.message.message_id,
-            reply_markup=category_selector_keyboard(current_cats)
-        )
+        bot.edit_message_reply_markup(chat_id=uid, message_id=call.message.message_id, reply_markup=categories_inline_markup(current_cats))
         bot.answer_callback_query(call.id, f"'{cat}' updated.")
 
     elif data == "done_cats":
-        selected = user.get("categories", []) or ["Other"]
+        selected = user.get("categories", []) or ["other"]
         cat_hashtags = " ".join([f"#{c.lower()}" for c in selected])
         confession_body = user.get("text", "")
 
@@ -431,32 +392,30 @@ def handle_callbacks(call):
             types.InlineKeyboardButton("✅ Approve & Post", callback_data=f"adm_app_{uid}"),
             types.InlineKeyboardButton("❌ Reject", callback_data=f"adm_rej_{uid}")
         )
-
-        safe_body = html.escape(confession_body)
-        admin_card = f"<b>Pending Confession</b>\n\n{safe_body}\n\n{cat_hashtags}"
-        bot.send_message(ADMIN_GROUP_ID, admin_card, reply_markup=admin_markup)
+        
+        admin_card = f"*Pending Confession*\n\n{confession_body}\n\n{cat_hashtags}"
+        bot.send_message(ADMIN_GROUP_ID, admin_card, reply_markup=admin_markup, parse_mode="Markdown")
 
         try:
             bot.delete_message(chat_id=uid, message_id=call.message.message_id)
         except Exception:
             pass
 
-        rate_limit_cache[uid] = time.time()
+        bot.send_message(uid, "✅ Your confession has been submitted and is pending review.", reply_markup=persistent_reply_keyboard())
+        
         user["aura"] = user.get("aura", 0) + 5
         user["state"] = "IDLE"
-        user["text"] = ""
         user["categories"] = []
-
-        bot.send_message(uid, "✅ Your confession has been submitted and is pending review.", reply_markup=main_menu_keyboard())
+        user["text"] = ""
 
     elif data.startswith("adm_rej_"):
-        bot.edit_message_text("❌ <b>Submission Rejected.</b>", chat_id=call.message.chat.id, message_id=call.message.message_id)
+        bot.edit_message_text("❌ *Submission Rejected.*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown")
 
     elif data.startswith("adm_app_"):
+        global confession_counter, posts_map
         target_uid = data.replace("adm_app_", "")
-        current_num = get_current_counter()
-
-        raw = call.message.text or ""
+        raw = call.message.text
+        
         parts = raw.split("\n\n")
         if len(parts) >= 3:
             body = "\n\n".join(parts[1:-1])
@@ -465,41 +424,38 @@ def handle_callbacks(call):
             body = raw
             hashtags = "#other"
 
-        safe_body = html.escape(body)
-        channel_post = f"<b>Confession #{current_num}</b>\n\n{safe_body}\n\n{hashtags}"
+        current_num = confession_counter
+        channel_post = f"*Confession #{current_num}*\n\n{body}\n\n{hashtags}"
 
         channel_msg = bot.send_message(
             CHANNEL_ID,
             channel_post,
-            reply_markup=channel_comment_button(current_num, 0)
+            reply_markup=channel_comment_button(current_num, 0),
+            parse_mode="Markdown"
         )
 
-        # Store channel message ID inside confession_comments.json
-        store = load_comments_store()
-        c_key = str(current_num)
-        if c_key not in store or isinstance(store[c_key], list):
-            existing_comms = store[c_key] if isinstance(store.get(c_key), list) else []
-            store[c_key] = {"channel_msg_id": channel_msg.message_id, "comments": existing_comms}
-        else:
-            store[c_key]["channel_msg_id"] = channel_msg.message_id
-        save_comments_store(store)
-
-        # Increment persistent counter
-        save_counter(current_num + 1)
+        # Store channel message ID permanently
+        posts_map[str(current_num)] = channel_msg.message_id
+        save_posts_map(posts_map)
 
         try:
             bot.send_message(
-                int(target_uid),
-                f"🎉 <b>Your confession has been approved and published!</b>\n\nIt is now live as <b>Confession #{current_num}</b> on {CHANNEL_ID}."
+                target_uid,
+                f"🎉 *Your confession has been approved and published!*\n\nIt is now live as *Confession #{current_num}* on {CHANNEL_ID}.",
+                parse_mode="Markdown"
             )
         except Exception:
             pass
 
         bot.edit_message_text(
-            f"✅ <b>Published as Confession #{current_num}</b>\n\n{safe_body}\n\n{hashtags}",
+            f"✅ *Published as Confession #{current_num}*\n\n{body}\n\n{hashtags}",
             chat_id=call.message.chat.id,
-            message_id=call.message.message_id
+            message_id=call.message.message_id,
+            parse_mode="Markdown"
         )
+
+        confession_counter += 1
+        save_counter(confession_counter)
 
     elif data.startswith("write_comm_"):
         c_num = data.replace("write_comm_", "")
@@ -507,45 +463,34 @@ def handle_callbacks(call):
         user["target_confession"] = str(c_num)
         bot.send_message(
             uid,
-            f"✍️ Type your anonymous comment for <b>Confession #{c_num}</b>:",
-            reply_markup=cancel_reply_keyboard()
+            f"✍️ Type your anonymous comment for *Confession #{c_num}*:",
+            reply_markup=cancel_reply_keyboard(),
+            parse_mode="Markdown"
         )
 
     elif data.startswith("like_") or data.startswith("dislike_"):
         action, c_num, idx_str = data.split("_")
         idx = int(idx_str)
-        store = load_comments_store()
-        c_key = str(c_num)
-
-        meta = store.get(c_key, {})
-        comments_list = meta.get("comments", []) if isinstance(meta, dict) else meta if isinstance(meta, list) else []
-
-        if idx < len(comments_list):
-            target_c = comments_list[idx]
+        global comments_db
+        if c_num in comments_db and idx < len(comments_db[c_num]):
             if action == "like":
-                target_c["likes"] = target_c.get("likes", 0) + 1
+                comments_db[c_num][idx]["likes"] = comments_db[c_num][idx].get("likes", 0) + 1
             else:
-                target_c["dislikes"] = target_c.get("dislikes", 0) + 1
-            save_comments_store(store)
-
+                comments_db[c_num][idx]["dislikes"] = comments_db[c_num][idx].get("dislikes", 0) + 1
+            save_comments(comments_db)
+            
+            c = comments_db[c_num][idx]
             bot.edit_message_reply_markup(
                 chat_id=uid,
                 message_id=call.message.message_id,
-                reply_markup=comment_action_keyboard(c_num, idx, target_c.get("likes", 0), target_c.get("dislikes", 0))
+                reply_markup=comment_action_markup(c_num, idx, c["likes"], c["dislikes"])
             )
             bot.answer_callback_query(call.id, "Reaction recorded!")
 
     elif data.startswith("rep_"):
-        bot.answer_callback_query(call.id, "Use '+ Add Comment' to post your reply.")
+        bot.answer_callback_query(call.id, "Type your comment using '+ Add Comment' button.")
 
-# --- CLEAN STARTUP & RECOVERY ---
-print("BDU Confession Bot Engine starting...")
-try:
-    bot.remove_webhook()
-except Exception as e:
-    print(f"Webhook clearance notice: {e}")
-
-# Pause 5 seconds to ensure Telegram clears old getUpdates locks
-time.sleep(5)
-
+# --- CLEAN STARTUP ---
+print("BDU Confession Bot is starting up...")
+bot.remove_webhook()
 bot.infinity_polling(skip_pending=True)
