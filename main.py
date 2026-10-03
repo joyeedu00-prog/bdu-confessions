@@ -239,9 +239,7 @@ def comment_action_markup(c_num, c_idx, likes, dislikes):
 @bot.message_handler(commands=['backup'])
 def handle_backup(message):
     uid = message.chat.id
-    # Only allowed from admin group or if initiated by the admin
     if message.chat.id != ADMIN_GROUP_ID and message.from_user.id != ADMIN_GROUP_ID:
-        # Check permissions
         try:
             member = bot.get_chat_member(ADMIN_GROUP_ID, message.from_user.id)
             if member.status not in ["creator", "administrator"]:
@@ -419,7 +417,8 @@ def display_browse_comments(chat_id, c_num):
                     chat_id,
                     user_info,
                     reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes),
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
                 )
             elif c_type == "animation" and c_file_id:
                 if reply_quote:
@@ -429,7 +428,8 @@ def display_browse_comments(chat_id, c_num):
                     chat_id,
                     user_info,
                     reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes),
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
                 )
             else:
                 clean_text = html.escape(str(c_text)) if c_text else ""
@@ -442,7 +442,8 @@ def display_browse_comments(chat_id, c_num):
                     chat_id,
                     body_message,
                     reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes),
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
                 )
         except Exception as e:
             print(f"[Error rendering comment]: {e}")
@@ -452,7 +453,8 @@ def display_browse_comments(chat_id, c_num):
                     chat_id,
                     fallback_msg,
                     reply_markup=comment_action_markup(c_num, idx, c_likes, c_dislikes),
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
                 )
             except Exception as e2:
                 print(f"[Fatal fallback error]: {e2}")
@@ -503,7 +505,7 @@ def handle_start(message):
                 f"🔥 <b>Aura:</b> {aura}\n\n"
                 f"<i>{html.escape(bio)}</i>"
             )
-            bot.send_message(uid, public_profile_text, parse_mode="HTML")
+            bot.send_message(uid, public_profile_text, parse_mode="HTML", disable_web_page_preview=True)
             return
         except Exception as e:
             print(f"[Error] Deep-link profile redirection error: {e}")
@@ -565,13 +567,14 @@ def show_my_profile(uid, chat_id=None, message_id=None):
                 chat_id=chat_id,
                 message_id=message_id,
                 reply_markup=profile_inline_markup(),
-                parse_mode="HTML"
+                parse_mode="HTML",
+                disable_web_page_preview=True
             )
             return
         except Exception:
             pass
 
-    bot.send_message(chat_id, profile_text, reply_markup=profile_inline_markup(), parse_mode="HTML")
+    bot.send_message(chat_id, profile_text, reply_markup=profile_inline_markup(), parse_mode="HTML", disable_web_page_preview=True)
 
 @bot.message_handler(func=lambda m: m.text == "👤 Profile")
 def handle_profile_button(message):
