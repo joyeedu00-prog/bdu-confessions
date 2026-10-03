@@ -8,7 +8,7 @@ import telebot
 from telebot import types
 
 # ---------------- CONFIGURATION ----------------
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8709978309:AAFQj1-8lauK_j8SNtOUxrL6GGzHVAbaWSI")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8709978309:AAFTdpdj9Y_S-O0NykrrD2oXx8GLwvk8TBU")
 ADMIN_GROUP_ID = int(os.environ.get("ADMIN_GROUP_ID", "-1004308348205"))
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@bduconfession00")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "bdu_new_confessions_bot")
