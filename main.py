@@ -333,6 +333,10 @@ def show_confession_hub(chat_id, c_num):
 
 def display_browse_comments(chat_id, c_num):
     c_key = str(c_num)
+    posts = load_posts_map()
+    post_info = posts.get(c_key, {})
+    confession_author_id = str(post_info.get("author_id", "")) if isinstance(post_info, dict) else ""
+
     comments_store = load_comments_store()
     raw_entry = comments_store.get(c_key, [])
 
@@ -380,10 +384,19 @@ def display_browse_comments(chat_id, c_num):
         display_name = "Anonymous"
         aura_count = 0
         link_url = ""
+        is_confession_author = False
+
         if c_sender_id:
+            # Check if this comment is from the confession author
+            if confession_author_id and str(c_sender_id) == confession_author_id:
+                is_confession_author = True
+                display_name = "⚜️ Confession Author"
+            else:
+                author_prof = get_user_profile(c_sender_id)
+                if author_prof.get("nickname"):
+                    display_name = author_prof["nickname"]
+
             author_prof = get_user_profile(c_sender_id)
-            if author_prof.get("nickname"):
-                display_name = author_prof["nickname"]
             aura_count = author_prof.get("aura", 0)
             link_url = f"https://t.me/{BOT_USERNAME}?start=user_{c_sender_id}"
 
@@ -516,7 +529,7 @@ def handle_start(message):
 
 # ---------- MAIN MENU BUTTONS ----------
 
-@bot.message_handler(func=lambda m: m.text == "✍ Confess")
+@bot.message_handler(func=lambda m: m.text and ("Confess" in m.text))
 def handle_confess_button(message):
     uid = message.chat.id
     now = time.time()
@@ -534,7 +547,7 @@ def handle_confess_button(message):
     msg = "Please send the text of your confession. You will be able to review, edit, or enhance it next"
     bot.send_message(uid, msg, reply_markup=cancel_reply_keyboard(), parse_mode="HTML")
 
-@bot.message_handler(func=lambda m: m.text == "❌ Cancel")
+@bot.message_handler(func=lambda m: m.text and ("Cancel" in m.text))
 def handle_cancel_button(message):
     uid = message.chat.id
     if uid in users_data:
@@ -576,15 +589,15 @@ def show_my_profile(uid, chat_id=None, message_id=None):
 
     bot.send_message(chat_id, profile_text, reply_markup=profile_inline_markup(), parse_mode="HTML", disable_web_page_preview=True)
 
-@bot.message_handler(func=lambda m: m.text == "👤 Profile")
+@bot.message_handler(func=lambda m: m.text and ("Profile" in m.text))
 def handle_profile_button(message):
     show_my_profile(message.chat.id)
 
-@bot.message_handler(func=lambda m: m.text == "ℹ Help")
+@bot.message_handler(func=lambda m: m.text and ("Help" in m.text))
 def handle_help_button(message):
     help_text = (
         "ℹ <b>BDU Confessions Help</b>\n\n"
-        "• Tap <b>✍️ Confess</b> to submit a secret or campus story.\n"
+        "• Tap <b>✍ Confess</b> to submit a secret or campus story.\n"
         "• Submissions and comments are 100% anonymous.\n"
         "• Respect community guidelines: No names, no doxxing, no hate speech."
     )
@@ -640,7 +653,7 @@ def handle_incoming_messages(message):
 
         raw_text = message.text.strip()
         if len(raw_text) < 10:
-            bot.send_message(uid, "⚠️ Your confession is too short. Please provide at least 10 characters.", parse_mode="HTML")
+            bot.send_message(uid, "⚠️️ Your confession is too short. Please provide at least 10 characters.", parse_mode="HTML")
             return
         if len(raw_text) > 1500:
             bot.send_message(uid, "⚠️ Your confession exceeds the 1,500 character limit.", parse_mode="HTML")
@@ -703,7 +716,7 @@ def handle_incoming_messages(message):
                 new_comment["file_id"] = message.document.file_id
                 new_comment["text"] = "[GIF]"
             else:
-                bot.send_message(uid, "⚠️ Only Text, Stickers, and GIFs are supported as comments.", parse_mode="HTML")
+                bot.send_message(uid, "⚠ Only Text, Stickers, and GIFs are supported as comments.", parse_mode="HTML")
                 return
         else:
             bot.send_message(uid, "⚠️ Unsupported comment format. Please send Text, Sticker, or GIF.", parse_mode="HTML")
@@ -889,7 +902,8 @@ def handle_callbacks(call):
         posts[str(current_num)] = {
             "msg_id": channel_msg.message_id,
             "text": body,
-            "tags": hashtags
+            "tags": hashtags,
+            "author_id": target_uid
         }
         save_posts_map(posts)
 
@@ -991,7 +1005,7 @@ def handle_callbacks(call):
 
         bot.send_message(
             uid,
-            f"✍️ <b>Replying {preview_ref}:</b>\n\nSend your text, sticker, or GIF reply:",
+            f"✍️️ <b>Replying {preview_ref}:</b>\n\nSend your text, sticker, or GIF reply:",
             reply_markup=cancel_reply_keyboard(),
             parse_mode="HTML"
         )
