@@ -324,15 +324,13 @@ def show_confession_hub(chat_id, c_num):
 
     count = len(comments_list)
 
+    parts = [f"<b>Confession #{c_num}</b>"]
     if original_text:
-        body_display = f"{html.escape(original_text)}\n\n{html.escape(original_tags)}"
-    else:
-        body_display = "Confession details"
+        parts.append(html.escape(original_text))
+    if original_tags:
+        parts.append(html.escape(original_tags))
 
-    hub_text = (
-        f"📖 <b>Confession #{c_num}</b>\n\n"
-        f"{body_display}"
-    )
+    hub_text = "\n\n".join(parts)
     bot.send_message(chat_id, hub_text, reply_markup=confession_hub_markup(c_num, count), parse_mode="HTML")
 
 def display_browse_comments(chat_id, c_num):
@@ -1002,14 +1000,6 @@ try:
     bot.remove_webhook()
 except Exception as e:
     print(f"Webhook clearance notice: {e}")
-
-# --- AUTO-DUMP RESCUE: Sends comments directly to your admin group ---
-try:
-    if os.path.exists("confession_comments.json"):
-        with open("confession_comments.json", "rb") as f:
-            bot.send_document(ADMIN_GROUP_ID, f, caption="🚨 RESCUED COMMENTS FILE")
-except Exception as e:
-    print(f"Rescue dump error: {e}")
 
 time.sleep(5)
 bot.infinity_polling(skip_pending=True)
