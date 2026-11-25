@@ -26,7 +26,7 @@ def health_check():
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
-    web_app.run(host='0.0.0.0', port=port)
+    web_app.run(host="0.0.0.0", port=port, threaded=True)
 
 def keep_alive():
     server_thread = Thread(target=run_web)
@@ -1012,11 +1012,17 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id)
 
 # --- CLEAN STARTUP & RECOVERY ---
-print("BDU Confession Bot Engine starting...")
+print("BDU Confession Bot Engine starting...", flush=True)
 try:
     bot.remove_webhook()
 except Exception as e:
-    print(f"Webhook clearance notice: {e}")
+    print(f"Webhook clearance notice: {e}", flush=True)
 
 time.sleep(5)
-bot.infinity_polling(skip_pending=True)
+
+while True:
+    try:
+        bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=25)
+    except Exception as e:
+        print(f"[Polling Error] Bot stopped and will restart in 5s: {e}", flush=True)
+        time.sleep(5)
